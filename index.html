@@ -1,0 +1,968 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+
+<title>Advanced Soroban Simulator</title>
+
+<style>
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+}
+
+body{
+    background:#f5f7fb;
+    font-family:'Segoe UI',sans-serif;
+    text-align:center;
+    user-select:none;
+    overflow-x:hidden;
+    padding:20px;
+}
+
+
+#toolbar{
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    gap:12px;
+    margin-bottom:20px;
+}
+
+#valueBox{
+    background:#fff;
+    border-radius:16px;
+    padding:14px 24px;
+    min-width:220px;
+    box-shadow:0 4px 12px rgba(0,0,0,.08);
+}
+
+#valueLabel{
+    font-size:13px;
+    color:#666;
+}
+
+#value{
+    font-size:28px;
+    font-weight:bold;
+    color:#222;
+}
+
+button{
+    border:none;
+    background:#2563eb;
+    color:white;
+    padding:12px 22px;
+    border-radius:12px;
+    cursor:pointer;
+    font-size:15px;
+    font-weight:600;
+    transition:all .2s ease;
+}
+
+button:hover{
+    background:#1d4ed8;
+    transform:translateY(-1px);
+}
+
+canvas{
+    display:block;
+    margin:0 auto;
+    touch-action:none;
+}
+</style>
+</head>
+
+<body>
+
+
+<div id="toolbar">
+
+    <div id="valueBox">
+        <div id="valueLabel">Current Value</div>
+        <div id="value">0</div>
+    </div>
+
+    <button id="resetBtn">Reset</button>
+
+</div>
+
+<canvas id="abacus"></canvas>
+
+<script>
+
+const COLS = 17;
+
+const canvas = document.getElementById("abacus");
+const ctx = canvas.getContext("2d");
+
+const valueEl = document.getElementById("value");
+const resetBtn = document.getElementById("resetBtn");
+const valueBox = document.getElementById("valueBox");
+
+const SHOW_VALUE_BOX = true; // true = show, false = hide
+const SHOW_RESET_BUTTON = true;
+if (!SHOW_VALUE_BOX) {
+    valueBox.style.display = "none";
+}
+if (!SHOW_RESET_BUTTON) {
+    resetBtn.style.display = "none";
+}
+
+let layout = {};
+
+function buildLayout(){
+
+    const ww = window.innerWidth;
+
+    const rodSpacing =
+        Math.floor((ww - 40) / (COLS + 1.4));
+
+    const leftMargin =
+        Math.round(rodSpacing * 0.9);
+
+    const beadWidth =
+        Math.round(rodSpacing * 0.74);
+
+    const beadHeight =
+        Math.round(rodSpacing * 0.42);
+
+    const beadRadius =
+        Math.round(beadHeight * 0.24);
+
+    const canvasWidth =
+        leftMargin * 2 +
+        (COLS - 1) * rodSpacing;
+
+    const canvasHeight =
+        Math.round(rodSpacing * 5.2);
+
+    const frameTop =
+        Math.round(rodSpacing * 0.65);
+
+    const frameBottom =
+        canvasHeight -
+        Math.round(rodSpacing * 0.5);
+
+    const beamY =
+        Math.round(
+            frameTop +
+            (frameBottom - frameTop) * 0.30
+        );
+
+    const upperRest =
+        frameTop + beadHeight;
+
+    const upperActive =
+        beamY -
+        Math.round(beadHeight * 0.62);
+
+    const lowerTop =
+        beamY +
+        Math.round(beadHeight * 0.28);
+
+    const lowerBottom =
+        frameBottom -
+        Math.round(beadHeight * 0.28);
+
+    const beadGap =
+        beadHeight +
+        Math.round(beadHeight * 0.25);
+
+    const bottomRest =
+        lowerBottom -
+        Math.round(beadHeight * 0.5);
+
+    const restY = [
+        bottomRest,
+        bottomRest - beadGap,
+        bottomRest - beadGap * 2,
+        bottomRest - beadGap * 3
+    ];
+
+    function activeY(slot){
+        return (
+            lowerTop +
+            Math.round(beadHeight * 0.5) +
+            slot * beadGap
+        );
+    }
+
+    layout = {
+        rodSpacing,
+        leftMargin,
+        beadWidth,
+        beadHeight,
+        beadRadius,
+
+        canvasWidth,
+        canvasHeight,
+
+        frameTop,
+        frameBottom,
+
+        beamY,
+
+        upperRest,
+        upperActive,
+
+        lowerTop,
+        lowerBottom,
+
+        beadGap,
+
+        restY,
+        activeY
+    };
+}
+
+const rods = Array.from(
+    {length:COLS},
+    ()=>({
+        upper:false,
+        lowerCount:0
+    })
+);
+
+const anim = Array.from(
+    {length:COLS},
+    ()=>({
+        upper:0,
+        lower:[0,0,0,0]
+    })
+);
+
+function targetLowerY(beadIndex,count){
+
+    if(beadIndex >= 4 - count){
+
+        const slot =
+            3 - beadIndex;
+
+        return layout.activeY(slot);
+    }
+
+    return layout.restY[beadIndex];
+}
+
+function snapToState(){
+
+    for(let c=0;c<COLS;c++){
+
+        anim[c].upper =
+            rods[c].upper
+            ? layout.upperActive
+            : layout.upperRest;
+
+        for(let b=0;b<4;b++){
+
+            anim[c].lower[b] =
+                targetLowerY(
+                    b,
+                    rods[c].lowerCount
+                );
+        }
+    }
+}
+const LERP = 0.20;
+let rafId = null;
+let hover = null;
+
+/* ==========================================
+   AUDIO
+========================================== */
+
+let audioCtx = null;
+
+function beep(){
+
+    try{
+
+        if(!audioCtx){
+            audioCtx =
+                new (
+                    window.AudioContext ||
+                    window.webkitAudioContext
+                )();
+        }
+
+        if(audioCtx.state === "suspended"){
+            audioCtx.resume();
+        }
+
+        const osc =
+            audioCtx.createOscillator();
+
+        const gain =
+            audioCtx.createGain();
+
+        osc.type = "sine";
+
+        osc.frequency.setValueAtTime(
+            520,
+            audioCtx.currentTime
+        );
+
+        osc.frequency.exponentialRampToValueAtTime(
+            260,
+            audioCtx.currentTime + 0.08
+        );
+
+        gain.gain.setValueAtTime(
+            0.07,
+            audioCtx.currentTime
+        );
+
+        gain.gain.exponentialRampToValueAtTime(
+            0.001,
+            audioCtx.currentTime + 0.12
+        );
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.13);
+
+    }catch(e){}
+}
+
+/* ==========================================
+   ROUND RECT
+========================================== */
+
+function roundRect(
+    x,
+    y,
+    w,
+    h,
+    r,
+    fill
+){
+
+    ctx.fillStyle = fill;
+
+    ctx.beginPath();
+
+    ctx.moveTo(x+r,y);
+
+    ctx.lineTo(x+w-r,y);
+    ctx.arcTo(x+w,y,x+w,y+r,r);
+
+    ctx.lineTo(x+w,y+h-r);
+    ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+
+    ctx.lineTo(x+r,y+h);
+    ctx.arcTo(x,y+h,x,y+h-r,r);
+
+    ctx.lineTo(x,y+r);
+    ctx.arcTo(x,y,x+r,y,r);
+
+    ctx.closePath();
+
+    ctx.fill();
+}
+
+/* ==========================================
+   DRAW BEAD
+========================================== */
+
+function drawBead(
+    cx,
+    cy,
+    isHover
+){
+
+    const bw =
+        layout.beadWidth;
+
+    const bh =
+        layout.beadHeight;
+
+    const br =
+        layout.beadRadius;
+
+    roundRect(
+        cx - bw/2 + 2,
+        cy - bh/2 + 3,
+        bw,
+        bh,
+        br,
+        "rgba(0,0,0,.22)"
+    );
+
+    roundRect(
+        cx - bw/2,
+        cy - bh/2,
+        bw,
+        bh,
+        br,
+        isHover
+            ? "#ff5a22"
+            : "#d90000"
+    );
+
+    ctx.fillStyle =
+        "rgba(255,255,255,.22)";
+
+    ctx.beginPath();
+
+    ctx.ellipse(
+        cx,
+        cy - bh/2 + bh*0.22,
+        bw/2 - 5,
+        bh*0.14,
+        0,
+        0,
+        Math.PI*2
+    );
+
+    ctx.fill();
+}
+
+/* ==========================================
+   DRAW
+========================================== */
+
+function draw(){
+
+    const L = layout;
+
+    ctx.clearRect(
+        0,
+        0,
+        L.canvasWidth,
+        L.canvasHeight
+    );
+
+    const frameLeft =
+        L.leftMargin -
+        Math.round(
+            L.rodSpacing * 0.48
+        );
+
+    const frameRight =
+        L.leftMargin +
+        (COLS-1)*L.rodSpacing +
+        Math.round(
+            L.rodSpacing * 0.48
+        );
+
+    const frameWidth =
+        frameRight - frameLeft;
+
+    /* outer wood */
+
+    roundRect(
+        frameLeft - 10,
+        L.frameTop - 12,
+        frameWidth + 20,
+        L.frameBottom -
+        L.frameTop + 24,
+        14,
+        "#7a4e22"
+    );
+
+    /* inner panel */
+
+    roundRect(
+        frameLeft,
+        L.frameTop,
+        frameWidth,
+        L.frameBottom -
+        L.frameTop,
+        6,
+        "#d7cdbf"
+    );
+
+    /* beam */
+
+    const beamGradient =
+        ctx.createLinearGradient(
+            0,
+            L.beamY - 7,
+            0,
+            L.beamY + 7
+        );
+
+    beamGradient.addColorStop(
+        0,
+        "#b08030"
+    );
+
+    beamGradient.addColorStop(
+        .5,
+        "#efc96b"
+    );
+
+    beamGradient.addColorStop(
+        1,
+        "#b08030"
+    );
+
+    ctx.fillStyle =
+        beamGradient;
+
+    ctx.fillRect(
+        frameLeft,
+        L.beamY - 7,
+        frameWidth,
+        14
+    );
+
+    /* rods */
+
+    for(let c=0;c<COLS;c++){
+
+        const x =
+            L.leftMargin +
+            c*L.rodSpacing;
+
+        const rodGradient =
+            ctx.createLinearGradient(
+                x-3,
+                0,
+                x+3,
+                0
+            );
+
+        rodGradient.addColorStop(
+            0,
+            "#444"
+        );
+
+        rodGradient.addColorStop(
+            .5,
+            "#bbb"
+        );
+
+        rodGradient.addColorStop(
+            1,
+            "#444"
+        );
+
+        ctx.strokeStyle =
+            rodGradient;
+
+        ctx.lineWidth =
+            Math.max(
+                3,
+                Math.round(
+                    L.rodSpacing * 0.055
+                )
+            );
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            x,
+            L.frameTop
+        );
+
+        ctx.lineTo(
+            x,
+            L.frameBottom
+        );
+
+        ctx.stroke();
+    }
+
+    /* beads */
+
+    for(let c=0;c<COLS;c++){
+
+        const x =
+            L.leftMargin +
+            c*L.rodSpacing;
+
+        const a = anim[c];
+
+        drawBead(
+            x,
+            a.upper,
+            hover &&
+            hover.col===c &&
+            hover.isUpper
+        );
+
+        for(let b=0;b<4;b++){
+
+            drawBead(
+                x,
+                a.lower[b],
+                hover &&
+                hover.col===c &&
+                !hover.isUpper &&
+                hover.beadIdx===b
+            );
+        }
+    }
+
+    /* markers */
+
+    [2,5,8,11,14].forEach(i=>{
+
+        const x =
+            L.leftMargin +
+            i*L.rodSpacing;
+
+        ctx.fillStyle =
+            "#fff";
+
+        ctx.beginPath();
+
+        ctx.arc(
+            x,
+            L.beamY,
+            Math.max(
+                3,
+                Math.round(
+                    L.rodSpacing * 0.05
+                )
+            ),
+            0,
+            Math.PI*2
+        );
+
+        ctx.fill();
+    });
+}
+
+/* ==========================================
+   ANIMATION LOOP
+========================================== */
+
+function animate(){
+
+    let busy = false;
+
+    for(let c=0;c<COLS;c++){
+
+        const a = anim[c];
+
+        const targetUpper =
+            rods[c].upper
+            ? layout.upperActive
+            : layout.upperRest;
+
+        const deltaUpper =
+            targetUpper -
+            a.upper;
+
+        if(Math.abs(deltaUpper) > 0.3){
+
+            a.upper +=
+                deltaUpper * LERP;
+
+            busy = true;
+
+        }else{
+
+            a.upper =
+                targetUpper;
+        }
+
+        for(let b=0;b<4;b++){
+
+            const target =
+                targetLowerY(
+                    b,
+                    rods[c].lowerCount
+                );
+
+            const delta =
+                target -
+                a.lower[b];
+
+            if(Math.abs(delta) > 0.3){
+
+                a.lower[b] +=
+                    delta * LERP;
+
+                busy = true;
+
+            }else{
+
+                a.lower[b] =
+                    target;
+            }
+        }
+    }
+
+    draw();
+
+    if(busy){
+
+        rafId =
+            requestAnimationFrame(
+                animate
+            );
+
+    }else{
+
+        rafId = null;
+    }
+}
+
+function kickAnimation(){
+
+    if(!rafId){
+
+        rafId =
+            requestAnimationFrame(
+                animate
+            );
+    }
+}
+/* ==========================================
+   HIT TEST
+========================================== */
+
+function hitTest(mx,my){
+
+    const L = layout;
+
+    for(let c=0;c<COLS;c++){
+
+        const x =
+            L.leftMargin +
+            c*L.rodSpacing;
+
+        const a = anim[c];
+
+        /* upper bead */
+
+        const bw = L.beadWidth;
+        const bh = L.beadHeight;
+
+        if(
+            mx > x - bw/2 &&
+            mx < x + bw/2 &&
+            my > a.upper - bh/2 &&
+            my < a.upper + bh/2
+        ){
+            return {
+                col:c,
+                isUpper:true,
+                bead:-1
+            };
+        }
+
+        /* lower beads */
+
+        for(let b=0;b<4;b++){
+
+            if(
+                mx > x - bw/2 &&
+                mx < x + bw/2 &&
+                my > a.lower[b] - bh/2 &&
+                my < a.lower[b] + bh/2
+            ){
+                return {
+                    col:c,
+                    isUpper:false,
+                    bead:b
+                };
+            }
+        }
+    }
+
+    return null;
+}
+
+/* ==========================================
+   VALUE CALCULATION (SOROBAN RULES)
+========================================== */
+
+function updateValue(){
+
+    let total = 0;
+
+    for(let c=0;c<COLS;c++){
+
+        const place =
+            Math.pow(10, COLS - c - 1);
+
+        let colValue = 0;
+
+        /* upper bead = 5 */
+
+        if(rods[c].upper){
+            colValue += 5;
+        }
+
+        /* lower beads = 1 each */
+
+        const activeLower =
+            rods[c].lowerCount;
+
+        colValue += activeLower;
+
+        total += colValue * place;
+    }
+
+    valueEl.textContent =
+        total.toLocaleString();
+}
+
+/* ==========================================
+   CLICK HANDLER
+========================================== */
+
+function handleClick(mx,my){
+
+    const hit = hitTest(mx,my);
+
+    if(!hit) return;
+
+    const c = hit.col;
+
+    if(hit.isUpper){
+
+        rods[c].upper =
+            !rods[c].upper;
+
+    }else{
+
+        const b = hit.bead;
+
+        const lc =
+            rods[c].lowerCount;
+
+        const isActive =
+            b >= 4 - lc;
+
+        if(!isActive){
+
+            rods[c].lowerCount =
+                4 - b;
+
+        }else{
+
+            rods[c].lowerCount =
+                3 - b;
+        }
+    }
+
+    beep();
+    updateValue();
+    kickAnimation();
+}
+
+/* ==========================================
+   EVENTS
+========================================== */
+
+function getXY(e){
+
+    const rect =
+        canvas.getBoundingClientRect();
+
+    const sx =
+        canvas.width /
+        rect.width;
+
+    const sy =
+        canvas.height /
+        rect.height;
+
+    const src =
+        e.touches ?
+        e.touches[0] :
+        e;
+
+    return [
+        (src.clientX - rect.left) * sx,
+        (src.clientY - rect.top) * sy
+    ];
+}
+
+canvas.addEventListener("click",e=>{
+
+    const [x,y] = getXY(e);
+
+    handleClick(x,y);
+});
+
+canvas.addEventListener("touchend",e=>{
+
+    e.preventDefault();
+
+    const [x,y] = getXY(e);
+
+    handleClick(x,y);
+
+},{passive:false});
+
+/* hover */
+
+canvas.addEventListener("mousemove",e=>{
+
+    const [x,y] = getXY(e);
+
+    hover = hitTest(x,y);
+
+    if(!rafId) draw();
+});
+
+canvas.addEventListener("mouseleave",()=>{
+
+    hover = null;
+
+    if(!rafId) draw();
+});
+
+/* ==========================================
+   RESET BUTTON
+========================================== */
+
+resetBtn.addEventListener("click",()=>{
+
+    for(let c=0;c<COLS;c++){
+
+        rods[c].upper = false;
+        rods[c].lowerCount = 0;
+    }
+
+    updateValue();
+    kickAnimation();
+});
+
+/* ==========================================
+   RESIZE
+========================================== */
+
+function resize(){
+
+    buildLayout();
+
+    canvas.width =
+        layout.canvasWidth;
+
+    canvas.height =
+        layout.canvasHeight;
+
+    snapToState();
+    draw();
+}
+
+window.addEventListener(
+    "resize",
+    resize
+);
+
+/* ==========================================
+   INIT
+========================================== */
+
+resize();
+updateValue();
+draw();
+
+</script>
+
+</body>
+</html>
