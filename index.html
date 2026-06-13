@@ -268,7 +268,7 @@ function snapToState(){
         }
     }
 }
-const LERP = 0.20;
+const LERP = 0.40;
 let rafId = null;
 let hover = null;
 
@@ -736,8 +736,8 @@ function hitTest(mx,my){
 
         /* upper bead */
 
-        const bw = L.beadWidth;
-        const bh = L.beadHeight;
+        const bw = L.beadWidth + 20;
+        const bh = L.beadHeight + 20;
 
         if(
             mx > x - bw/2 &&
