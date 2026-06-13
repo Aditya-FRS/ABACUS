@@ -1,4 +1,5 @@
 
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -71,7 +72,7 @@ button:hover{
 canvas{
     display:block;
     margin:0 auto;
-    touch-action:none;
+    touch-action:manipulation;
 }
 </style>
 </head>
@@ -869,10 +870,15 @@ function getXY(e){
         canvas.height /
         rect.height;
 
-    const src =
-        e.touches ?
-        e.touches[0] :
-        e;
+    let src;
+
+    if (e.changedTouches && e.changedTouches.length) {
+        src = e.changedTouches[0];
+    } else if (e.touches && e.touches.length) {
+        src = e.touches[0];
+    } else {
+        src = e;
+    }
 
     return [
         (src.clientX - rect.left) * sx,
@@ -880,22 +886,12 @@ function getXY(e){
     ];
 }
 
-canvas.addEventListener("click",e=>{
+canvas.addEventListener("pointerdown",e=>{
 
     const [x,y] = getXY(e);
 
     handleClick(x,y);
 });
-
-canvas.addEventListener("touchend",e=>{
-
-    e.preventDefault();
-
-    const [x,y] = getXY(e);
-
-    handleClick(x,y);
-
-},{passive:false});
 
 /* hover */
 
